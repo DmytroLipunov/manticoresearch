@@ -1,0 +1,9 @@
+build
+cache
+*.deb
+*.ddeb
+*.rpm
+*.tar
+*.tar.gz
+*.tgz
+*.zip

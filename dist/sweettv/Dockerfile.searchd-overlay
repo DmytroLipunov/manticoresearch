@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+
+ARG BUILDER_IMAGE=manticoresearch/external_toolchain:clang16_cmake3263
+ARG BASE_IMAGE=manticoresearch/manticore:28.4.4
+
+FROM ${BUILDER_IMAGE} AS builder
+
+ARG TARGETPLATFORM
+ARG DISTR=jammy
+ARG BOOST_URL_KEY=boost_nov22
+ARG SYSROOT_URL_KEY=roots_nov22
+ARG SYSROOT_URL=https://repo.manticoresearch.com/repository/sysroots
+ARG CTEST_CONFIGURATION_TYPE=RelWithDebInfo
+ARG CTEST_CMAKE_GENERATOR="Unix Makefiles"
+ARG MCL_LOCAL_RUNTIME=OFF
+
+ENV CI_PROJECT_DIR=/manticore \
+	CI_COMMIT_REF_NAME=sweettv-searchd-overlay \
+	CI_SERVER_NAME=docker \
+	CTEST_CONFIGURATION_TYPE=${CTEST_CONFIGURATION_TYPE} \
+	CTEST_CMAKE_GENERATOR=${CTEST_CMAKE_GENERATOR} \
+	DISTR=${DISTR} \
+	MCL_LOCAL_RUNTIME=${MCL_LOCAL_RUNTIME} \
+	SYSROOT_URL=${SYSROOT_URL} \
+	boost=${BOOST_URL_KEY} \
+	sysroot=${SYSROOT_URL_KEY}
+
+WORKDIR /manticore
+COPY . /manticore
+
+RUN set -eux; \
+	case "${TARGETPLATFORM}" in \
+		linux/amd64|"") export arch=x86_64 ;; \
+		linux/arm64) export arch=aarch64 ;; \
+		*) echo "unsupported TARGETPLATFORM=${TARGETPLATFORM}" >&2; exit 1 ;; \
+	esac; \
+	bash /sysroot/root/entry_point.sh; \
+	git config --global --add safe.directory /manticore; \
+	export CMAKE_TOOLCHAIN_FILE=/manticore/dist/build_dockers/cross/linux.cmake; \
+	ctest -VV -S misc/ctest/justbuild.cmake -DCTEST_SOURCE_DIRECTORY=/manticore --no-compress-output; \
+	test -x /manticore/build/src/searchd
+
+FROM ${BASE_IMAGE}
+
+ARG IMAGE_REVISION=unknown
+ARG IMAGE_SOURCE=https://github.com/sweet-tv/manticoresearch
+
+LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
+	org.opencontainers.image.revision="${IMAGE_REVISION}" \
+	org.opencontainers.image.description="SWEET.TV Manticore image with patched searchd overlay"
+
+COPY --from=builder /manticore/build/src/searchd /usr/bin/searchd
+
+RUN searchd --version
