@@ -5577,10 +5577,23 @@ KeywordsReplyParser_c::KeywordsReplyParser_c ( bool bGetStats, CSphVector<CSphKe
 {
 }
 
-bool KeywordsReplyParser_c::ParseReply ( MemInputBuffer_c & tReq, AgentConn_t & ) const
+bool KeywordsReplyParser_c::ParseReply ( MemInputBuffer_c & tReq, AgentConn_t & tAgent ) const
 {
 	int iWords = tReq.GetInt();
+	const int iMinKeywordReplyWordBytes = ( m_bStats ? 5 : 3 ) * (int)sizeof ( int );
+	if ( iWords<0 || iWords>tReq.HasBytes()/iMinKeywordReplyWordBytes )
+	{
+		tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: keyword count %d, remaining bytes %d", iWords, tReq.HasBytes() );
+		return false;
+	}
+
 	int iLen = m_dKeywords.GetLength();
+	if ( iWords>INT_MAX-iLen )
+	{
+		tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: keyword count overflow %d", iWords );
+		return false;
+	}
+
 	m_dKeywords.Resize ( iWords + iLen );
 	for ( int i=0; i<iWords; i++ )
 	{
@@ -5592,6 +5605,12 @@ bool KeywordsReplyParser_c::ParseReply ( MemInputBuffer_c & tReq, AgentConn_t & 
 		{
 			tWord.m_iDocs = tReq.GetInt();
 			tWord.m_iHits = tReq.GetInt();
+		}
+
+		if ( tReq.GetError() )
+		{
+			tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: %s", tReq.GetErrorMessage().cstr() );
+			return false;
 		}
 	}
 
@@ -6032,14 +6051,33 @@ public:
 		: m_tRes ( tRes )
 		, m_sSentence ( sSentence )
 	{}
-	bool ParseReply ( MemInputBuffer_c & tReq, AgentConn_t & ) const final
+	bool ParseReply ( MemInputBuffer_c & tReq, AgentConn_t & tAgent ) const final
 	{
 		CSphString sSentence = tReq.GetString();
+		if ( tReq.GetError() )
+		{
+			tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: %s", tReq.GetErrorMessage().cstr() );
+			return false;
+		}
+
 		if ( m_sSentence.IsEmpty() )
 			m_sSentence = sSentence;
 
 		int iWords = tReq.GetInt();
+		const int iMinSuggestReplyWordBytes = 4 * (int)sizeof ( int );
+		if ( iWords<0 || iWords>tReq.HasBytes()/iMinSuggestReplyWordBytes )
+		{
+			tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: suggest word count %d, remaining bytes %d", iWords, tReq.HasBytes() );
+			return false;
+		}
+
 		int iOff = m_tRes.m_dMatched.GetLength();
+		if ( iWords>INT_MAX-iOff )
+		{
+			tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: suggest word count overflow %d", iWords );
+			return false;
+		}
+
 		m_tRes.m_dMatched.Resize ( iOff + iWords );
 		for ( int i=0; i<iWords; i++ )
 		{
@@ -6049,10 +6087,20 @@ public:
 			tWord.m_iFoundDocs = tReq.GetInt();
 
 			int iWordLen = tReq.GetInt();
+			if ( iWordLen<0 || iWordLen>tReq.HasBytes() || iWordLen==INT_MAX )
+			{
+				tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: suggest word length %d, remaining bytes %d", iWordLen, tReq.HasBytes() );
+				return false;
+			}
+
 			tWord.m_iNameOff = m_tRes.m_dBuf.GetLength();
 			tWord.m_iLen = iWordLen + 1;
 			BYTE * pDst = m_tRes.m_dBuf.AddN ( iWordLen + 1 );
-			tReq.GetBytes ( pDst, iWordLen );
+			if ( !tReq.GetBytes ( pDst, iWordLen ) )
+			{
+				tAgent.m_sFailure.SetSprintf ( "invalid or truncated remote reply: %s", tReq.GetErrorMessage().cstr() );
+				return false;
+			}
 			pDst[iWordLen] = '\0';
 			tWord.m_iNameHash = sphCRC32 ( pDst, iWordLen );
 		}

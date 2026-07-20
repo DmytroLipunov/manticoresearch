@@ -2637,7 +2637,18 @@ bool AgentConn_t::CommitResult ()
 		m_sFailure.SetSprintf ( "remote warning: %s", tReq.GetString ().cstr () );
 
 	if ( !m_pParser->ParseReply ( tReq, *this ) )
+	{
+		if ( tReq.GetError () )
+			m_sFailure.SetSprintf ( "invalid or truncated remote reply: %s", tReq.GetErrorMessage ().cstr () );
+
+		if ( m_sFailure.Begins ( "invalid or truncated remote reply" ) )
+			return Fatal ( eWrongReplies, "%s", m_sFailure.cstr () );
+
 		return BadResult ();
+	}
+
+	if ( tReq.GetError () )
+		return Fatal ( eWrongReplies, "invalid or truncated remote reply: %s", tReq.GetErrorMessage ().cstr () );
 
 	Finish();
 
@@ -3894,4 +3905,3 @@ bool sphNBSockEof ( int iSock )
 		return true;
 	return false;
 }
-
